@@ -253,7 +253,7 @@ class StrikeView(View):
                 given_by = record['given_by']
                 reason = record.get('reason', 'No reason')
                 history_text += f"{i}. {timestamp} (by {given_by}) - {reason}\n"
-            embed.add_field(name="Strike History (Last 5)", value=history_text, inline=False)
+            embed.add_field(name="Strike History (last 3)", value=history_text, inline=False)
         else:
             embed.add_field(name="Strike History", value="No strikes remaining!", inline=False)
         if new_count == 0:
@@ -341,7 +341,7 @@ async def strikemenu(ctx, user: discord.User):
         reason = record.get('reason', 'No reason')
         history_text += f"{i}. {timestamp} (by {given_by}) - {reason}\n"
     embed = discord.Embed(title=f"{user.name}'s Strikes", description=f"**Total Strikes: {strike_count}/{MAX_STRIKES}**", color=color)
-    embed.add_field(name="Strike History (Last 5)", value=history_text or "No history", inline=False)
+    embed.add_field(name="Strike History (last 3)", value=history_text or "No history", inline=False)
     view = StrikeView(user, strikes_data)
     view.message = await ctx.send(embed=embed, view=view)
 
@@ -366,7 +366,7 @@ async def mystrikes(ctx):
         history_text += f"{i}. {timestamp} (by {given_by}) - {reason}\n"
     embed = discord.Embed(title="⚠️ Your Strikes", description=f"You have **{strike_count}/{MAX_STRIKES} strikes**.", color=color)
     embed.add_field(name="Status", value=status, inline=False)
-    embed.add_field(name="Strike History (Last 5)", value=history_text or "No history", inline=False)
+    embed.add_field(name="Strike History (last 3)", value=history_text or "No history", inline=False)
     if strike_count >= MAX_STRIKES:
         embed.set_footer(text="⚠️ You will be executed. Contact an admin immediately.")
     await ctx.send(embed=embed)
