@@ -1,0 +1,5 @@
+{
+  "deploy": {
+    "startCommand": "python strike_bot.py"
+  }
+}
