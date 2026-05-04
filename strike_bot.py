@@ -33,6 +33,23 @@ def save_strikes(strikes):
 
 strikes = load_strikes()
 
+# After strikes = load_strikes(), add:
+
+WARNINGS_FILE = 'warnings.json'
+MAX_WARNINGS = 5
+
+def load_warnings():
+    if os.path.exists(WARNINGS_FILE):
+        with open(WARNINGS_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_warnings(warnings):
+    with open(WARNINGS_FILE, 'w') as f:
+        json.dump(warnings, f, indent=2)
+
+warnings = load_warnings()
+
 # Role nickname shortforms
 ROLE_NICKNAME_MAP = {
     1458476438020952205: "[DG]", 1484975826897469490: "[WM]",
@@ -633,6 +650,229 @@ async def slash_timeout(interaction: discord.Interaction, user: discord.User, re
         await interaction.followup.send(embed=embed)
     except Exception as e:
         await interaction.followup.send(embed=discord.Embed(title="❌ Timeout Failed", description=str(e), color=discord.Color.red()))
+
+# ============ WARN SYSTEM COMMANDS ============
+
+@bot.command(name='warn')
+@commands.has_permissions(administrator=True)
+async def warn(ctx, user: discord.User, *, reason="No reason provided"):
+    """Warn a user (admins only)"""
+    global warnings
+    warnings = load_warnings()
+    
+    user_id = str(user.id)
+    
+    if user_id == str(ctx.author.id):
+        await ctx.send("❌ You cannot warn yourself.")
+        return
+    
+    if user.id == bot.user.id:
+        await ctx.send("❌ You cannot warn the bot.")
+        return
+    
+    if user_id not in warnings:
+        warnings[user_id] = {'username': user.name, 'count': 0, 'history': []}
+    
+    warnings[user_id]['count'] += 1
+    warnings[user_id]['history'].append({
+        'timestamp': datetime.now().isoformat(),
+        'warned_by': ctx.author.name,
+        'warned_by_id': ctx.author.id,
+        'reason': reason
+    })
+    
+    save_warnings(warnings)
+    
+    warn_count = warnings[user_id]['count']
+    
+    if warn_count == 1:
+        color = discord.Color.yellow()
+        level = "⚠️ First warning"
+    elif warn_count == 2:
+        color = discord.Color.yellow()
+        level = "⚠️⚠️ Second warning"
+    elif warn_count == 3:
+        color = discord.Color.orange()
+        level = "⚠️⚠️⚠️ Third warning - Final warning"
+    else:
+        color = discord.Color.red()
+        level = "❌ Multiple warnings - Action pending"
+    
+    embed = discord.Embed(title="⚠️ User Warned", description=f"{user.mention} has received a warning.", color=color, timestamp=datetime.now())
+    embed.add_field(name="Total Warnings", value=f"**{warn_count}/{MAX_WARNINGS}**", inline=True)
+    embed.add_field(name="Warned By", value=ctx.author.mention, inline=True)
+    embed.add_field(name="Reason", value=reason, inline=True)
+    embed.add_field(name="Warning Level", value=level, inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    
+    await ctx.send(embed=embed)
+    
+    # Log to channel
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        log_embed = discord.Embed(title="📝 Warning Logged", description=f"{user.mention} was warned", color=color, timestamp=datetime.now())
+        log_embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=True)
+        log_embed.add_field(name="Warned By", value=f"{ctx.author.name} ({ctx.author.id})", inline=True)
+        log_embed.add_field(name="Total Warnings", value=f"{warn_count}/{MAX_WARNINGS}", inline=True)
+        log_embed.add_field(name="Reason", value=reason, inline=False)
+        await log_channel.send(embed=log_embed)
+    
+    # Auto-timeout at max warnings
+    if warn_count >= MAX_WARNINGS:
+        member = ctx.guild.get_member(user.id)
+        if member:
+            until = discord.utils.utcnow() + timedelta(hours=1)
+            try:
+                await member.timeout(until, reason=f"Reached {MAX_WARNINGS} warnings")
+                await ctx.send(f"🔇 {user.mention} has been automatically timed out for 1 hour due to reaching {MAX_WARNINGS} warnings.")
+            except:
+                pass
+
+@bot.command(name='warnings')
+async def check_warnings(ctx, user: discord.User = None):
+    """Check warnings for a user"""
+    if user is None:
+        user = ctx.author
+    
+    user_id = str(user.id)
+    
+    if user.id != ctx.author.id and not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ You can only check your own warnings.")
+        return
+    
+    if user_id not in warnings or warnings[user_id]['count'] == 0:
+        embed = discord.Embed(title="✅ Warnings", description=f"{user.mention} has **0/{MAX_WARNINGS} warnings**.", color=discord.Color.green())
+        await ctx.send(embed=embed)
+        return
+    
+    warn_count = warnings[user_id]['count']
+    history = warnings[user_id]['history']
+    
+    if warn_count >= MAX_WARNINGS:
+        color = discord.Color.red()
+        status = "⚠️ ACTION PENDING"
+    elif warn_count >= 3:
+        color = discord.Color.orange()
+        status = "⚠️ Multiple warnings"
+    else:
+        color = discord.Color.yellow()
+        status = "⚠️ Warning(s) issued"
+    
+    history_text = ""
+    for i, record in enumerate(history[-5:], 1):
+        timestamp = record['timestamp'][:10]
+        warned_by = record['warned_by']
+        reason = record.get('reason', 'No reason')
+        history_text += f"{i}. {timestamp} (by {warned_by}) - {reason}\n"
+    
+    embed = discord.Embed(title=f"⚠️ {user.name}'s Warnings", description=f"**Total: {warn_count}/{MAX_WARNINGS}**", color=color)
+    embed.add_field(name="Status", value=status, inline=False)
+    embed.add_field(name="Warning History (Last 5)", value=history_text or "No history", inline=False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='clearwarnings')
+@commands.has_permissions(administrator=True)
+async def clear_warnings(ctx, user: discord.User):
+    """Clear all warnings for a user (admins only)"""
+    user_id = str(user.id)
+    
+    if user_id not in warnings or warnings[user_id]['count'] == 0:
+        await ctx.send(f"❌ {user.mention} has no warnings to clear.")
+        return
+    
+    old_count = warnings[user_id]['count']
+    warnings[user_id]['count'] = 0
+    warnings[user_id]['history'] = []
+    save_warnings(warnings)
+    
+    embed = discord.Embed(title="✅ Warnings Cleared", description=f"Cleared **{old_count}** warnings for {user.mention}", color=discord.Color.green(), timestamp=datetime.now())
+    embed.add_field(name="Cleared By", value=ctx.author.mention, inline=True)
+    await ctx.send(embed=embed)
+    
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        log_embed = discord.Embed(title="📝 Warnings Cleared", description=f"All warnings cleared for {user.mention}", color=discord.Color.blue(), timestamp=datetime.now())
+        log_embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=True)
+        log_embed.add_field(name="Cleared By", value=f"{ctx.author.name} ({ctx.author.id})", inline=True)
+        log_embed.add_field(name="Warnings Removed", value=str(old_count), inline=True)
+        await log_channel.send(embed=log_embed)
+
+@bot.tree.command(name="warn", description="Warn a user")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(user="The user to warn", reason="Reason for the warning")
+async def slash_warn(interaction: discord.Interaction, user: discord.User, reason: str = "No reason provided"):
+    await interaction.response.defer()
+    global warnings
+    warnings = load_warnings()
+    
+    user_id = str(user.id)
+    
+    if user_id == str(interaction.user.id):
+        await interaction.followup.send("❌ You cannot warn yourself.")
+        return
+    
+    if user.id == bot.user.id:
+        await interaction.followup.send("❌ You cannot warn the bot.")
+        return
+    
+    if user_id not in warnings:
+        warnings[user_id] = {'username': user.name, 'count': 0, 'history': []}
+    
+    warnings[user_id]['count'] += 1
+    warnings[user_id]['history'].append({
+        'timestamp': datetime.now().isoformat(),
+        'warned_by': interaction.user.name,
+        'warned_by_id': interaction.user.id,
+        'reason': reason
+    })
+    
+    save_warnings(warnings)
+    
+    warn_count = warnings[user_id]['count']
+    
+    if warn_count == 1:
+        color = discord.Color.yellow()
+        level = "⚠️ First warning"
+    elif warn_count == 2:
+        color = discord.Color.yellow()
+        level = "⚠️⚠️ Second warning"
+    elif warn_count == 3:
+        color = discord.Color.orange()
+        level = "⚠️⚠️⚠️ Third warning - Final warning"
+    else:
+        color = discord.Color.red()
+        level = "❌ Multiple warnings - Action pending"
+    
+    embed = discord.Embed(title="⚠️ User Warned", description=f"{user.mention} has received a warning.", color=color, timestamp=datetime.now())
+    embed.add_field(name="Total Warnings", value=f"**{warn_count}/{MAX_WARNINGS}**", inline=True)
+    embed.add_field(name="Warned By", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Reason", value=reason, inline=True)
+    embed.add_field(name="Warning Level", value=level, inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    
+    await interaction.followup.send(embed=embed)
+    
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        log_embed = discord.Embed(title="📝 Warning Logged", description=f"{user.mention} was warned", color=color, timestamp=datetime.now())
+        log_embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=True)
+        log_embed.add_field(name="Warned By", value=f"{interaction.user.name} ({interaction.user.id})", inline=True)
+        log_embed.add_field(name="Total Warnings", value=f"{warn_count}/{MAX_WARNINGS}", inline=True)
+        log_embed.add_field(name="Reason", value=reason, inline=False)
+        await log_channel.send(embed=log_embed)
+    
+    if warn_count >= MAX_WARNINGS:
+        member = interaction.guild.get_member(user.id)
+        if member:
+            until = discord.utils.utcnow() + timedelta(hours=1)
+            try:
+                await member.timeout(until, reason=f"Reached {MAX_WARNINGS} warnings")
+                await interaction.followup.send(f"🔇 {user.mention} has been automatically timed out for 1 hour.")
+            except:
+                pass
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
