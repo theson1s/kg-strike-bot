@@ -1,5 +1,3 @@
-C:\Users\Admin\Downloads\files\
-├── strike_bot.py
-├── requirements.txt      ← This file (NOT "cd Cuser...")
-├── strikes.json
-└── role_formats.json
+discord.py>=2.0.0
+aiohttp
+flask
