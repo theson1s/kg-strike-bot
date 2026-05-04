@@ -635,4 +635,4 @@ async def slash_timeout(interaction: discord.Interaction, user: discord.User, re
         await interaction.followup.send(embed=discord.Embed(title="❌ Timeout Failed", description=str(e), color=discord.Color.red()))
 
 # Run the bot
-bot.run('DISCORD_TOKEN')
+bot.run(os.getenv('DISCORD_TOKEN'))
