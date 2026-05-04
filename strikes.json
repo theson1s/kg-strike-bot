@@ -1,0 +1,39 @@
+{
+  "1244049005881856135": {
+    "username": "doyoucare._",
+    "count": 1,
+    "history": [
+      {
+        "timestamp": "2026-05-04T17:10:27.941366",
+        "given_by": "ryuunosuke0067"
+      }
+    ]
+  },
+  "1422568394594586736": {
+    "username": "ryuunosuke0067",
+    "count": 0,
+    "history": []
+  },
+  "1295489568090357793": {
+    "username": "khaosgeneral",
+    "count": 1,
+    "history": [
+      {
+        "timestamp": "2026-05-04T19:25:13.879398",
+        "given_by": "ryuunosuke0067",
+        "given_by_id": 1422568394594586736,
+        "reason": "to test"
+      }
+    ]
+  },
+  "492695875055910914": {
+    "username": "yb9g",
+    "count": 0,
+    "history": []
+  },
+  "858375572371931166": {
+    "username": "d.s33.",
+    "count": 0,
+    "history": []
+  }
+}
