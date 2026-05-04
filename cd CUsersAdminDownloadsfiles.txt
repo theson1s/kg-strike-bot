@@ -1,6 +1,1 @@
-cd C:\Users\Admin\Downloads\files
-git init
-git add strike_bot.py requirements.txt
-git commit -m "First commit"
-git remote add origin https://github.com/YOUR_USERNAME/kg-strike-bot.git
-git push -u origin main
+
