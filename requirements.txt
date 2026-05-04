@@ -1,0 +1,5 @@
+C:\Users\Admin\Downloads\files\
+├── strike_bot.py
+├── requirements.txt      ← This file (NOT "cd Cuser...")
+├── strikes.json
+└── role_formats.json
