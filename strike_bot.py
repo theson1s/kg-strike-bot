@@ -20,6 +20,10 @@ MAX_STRIKES = 3
 KG_ROLE_ID = 1472350053296242698
 LOG_CHANNEL_ID = 1500853001999483041
 
+# Warn system
+WARNINGS_FILE = 'warnings.json'
+MAX_WARNINGS = 5
+
 def load_strikes():
     if os.path.exists(STRIKES_FILE):
         with open(STRIKES_FILE, 'r') as f:
@@ -30,9 +34,20 @@ def save_strikes(strikes):
     with open(STRIKES_FILE, 'w') as f:
         json.dump(strikes, f, indent=2)
 
-strikes = load_strikes()
+def load_warnings():
+    if os.path.exists(WARNINGS_FILE):
+        with open(WARNINGS_FILE, 'r') as f:
+            return json.load(f)
+    return {}
 
-# Role nickname map (unchanged)
+def save_warnings(warnings):
+    with open(WARNINGS_FILE, 'w') as f:
+        json.dump(warnings, f, indent=2)
+
+strikes = load_strikes()
+warnings = load_warnings()
+
+# Nickname role map
 ROLE_NICKNAME_MAP = {
     1458476438020952205: "[DG]", 1484975826897469490: "[WM]",
     1462458731856924910: "[DC]", 1462459145281208624: "[SC]",
@@ -47,7 +62,15 @@ ROLE_NICKNAME_MAP = {
     1460246158227144724: "[PR]",
 }
 
-ROLE_PRIORITY_ORDER = [1458476438020952205, 1484975826897469490, 1462458731856924910, 1462459145281208624, 1460085557953826878, 1462459672819793952, 1464762958965117155, 1480538236391526594, 1480540429333168279, 1480535505232859359, 1460083436051234890, 1480535648598495232, 1480536433113436301, 1480536192087887984, 1480537567077204008, 1480537496365568082, 1480537415192940544, 1480537295047229502, 1480537224675328090, 1480537109239435328, 1460246158227144724]
+ROLE_PRIORITY_ORDER = [
+    1458476438020952205, 1484975826897469490, 1462458731856924910,
+    1462459145281208624, 1460085557953826878, 1462459672819793952,
+    1464762958965117155, 1480538236391526594, 1480540429333168279,
+    1480535505232859359, 1460083436051234890, 1480535648598495232,
+    1480536433113436301, 1480536192087887984, 1480537567077204008,
+    1480537496365568082, 1480537415192940544, 1480537295047229502,
+    1480537224675328090, 1480537109239435328, 1460246158227144724,
+]
 
 ROLE_FORMATS_FILE = 'role_formats.json'
 
@@ -68,6 +91,7 @@ def save_role_formats(formats):
 
 ROLE_NICKNAME_MAP = load_role_formats()
 
+# Helper functions
 def parse_duration(duration_str: str):
     if not duration_str or duration_str.lower() == 'permanent':
         return None
@@ -77,9 +101,9 @@ def parse_duration(duration_str: str):
     value = int(match.group(1))
     unit = match.group(2)
     if unit == 'd': return value * 86400
-    elif unit == 'h': return value * 3600
-    elif unit == 'm': return value * 60
-    elif unit == 's': return value
+    if unit == 'h': return value * 3600
+    if unit == 'm': return value * 60
+    if unit == 's': return value
     return None
 
 def format_duration(seconds: int):
@@ -99,12 +123,9 @@ async def update_nickname_with_roles(member: discord.Member):
     highest_role_shortform = None
     for role_id in ROLE_PRIORITY_ORDER:
         if role_id in ROLE_NICKNAME_MAP:
-            for role in member.roles:
-                if role.id == role_id:
-                    highest_role_shortform = ROLE_NICKNAME_MAP[role_id]
-                    break
-        if highest_role_shortform:
-            break
+            if any(role.id == role_id for role in member.roles):
+                highest_role_shortform = ROLE_NICKNAME_MAP[role_id]
+                break
     current_name = member.display_name
     for shortform in ROLE_NICKNAME_MAP.values():
         if current_name.startswith(shortform + " "):
@@ -120,19 +141,19 @@ async def update_nickname_with_roles(member: discord.Member):
             except:
                 pass
     else:
-        if member.nick:
-            for shortform in ROLE_NICKNAME_MAP.values():
-                if member.nick.startswith(shortform + " "):
-                    try:
-                        await member.edit(nick=None)
-                    except:
-                        pass
-                    break
+        if member.nick and any(member.nick.startswith(s + " ") for s in ROLE_NICKNAME_MAP.values()):
+            try:
+                await member.edit(nick=None)
+            except:
+                pass
 
 async def log_strike(user: discord.User, author: discord.User, reason: str, strike_count: int):
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if not log_channel:
         return
+    # Prevent rate limiting
+    await asyncio.sleep(0.5)
+
     if strike_count == 1:
         color = discord.Color.yellow()
         warning = "First strike - Warning"
@@ -142,6 +163,7 @@ async def log_strike(user: discord.User, author: discord.User, reason: str, stri
     else:
         color = discord.Color.red()
         warning = "Third strike - Action required"
+
     log_embed = discord.Embed(title="Strike Logged", description=f"{user.mention} has received a strike.", color=color, timestamp=datetime.now())
     log_embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=True)
     log_embed.add_field(name="Issued By", value=f"{author.name} ({author.id})", inline=True)
@@ -150,8 +172,36 @@ async def log_strike(user: discord.User, author: discord.User, reason: str, stri
     log_embed.add_field(name="Warning Level", value=warning, inline=False)
     if user.avatar:
         log_embed.set_thumbnail(url=user.avatar.url)
+
     await log_channel.send(embed=log_embed)
 
+async def log_warning(user: discord.User, author: discord.User, reason: str, warn_count: int):
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if not log_channel:
+        return
+    await asyncio.sleep(0.5)
+
+    if warn_count >= MAX_WARNINGS:
+        color = discord.Color.red()
+        level = "Warning limit reached"
+    elif warn_count >= 3:
+        color = discord.Color.orange()
+        level = "Multiple warnings"
+    else:
+        color = discord.Color.yellow()
+        level = "Minor warning"
+
+    log_embed = discord.Embed(title="Warning Logged", description=f"{user.mention} has been warned.", color=color, timestamp=datetime.now())
+    log_embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=True)
+    log_embed.add_field(name="Issued By", value=f"{author.name} ({author.id})", inline=True)
+    log_embed.add_field(name="Total Warnings", value=f"{warn_count}/{MAX_WARNINGS}", inline=True)
+    log_embed.add_field(name="Reason", value=reason, inline=False)
+    log_embed.add_field(name="Level", value=level, inline=False)
+    if user.avatar:
+        log_embed.set_thumbnail(url=user.avatar.url)
+    await log_channel.send(embed=log_embed)
+
+# Events
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -163,7 +213,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if before.roles != after.roles:
         await update_nickname_with_roles(after)
 
-# --------------------- STRIKE COMMAND ---------------------
+# --------------------- STRIKE COMMANDS ---------------------
 @bot.command(name='strike')
 async def strike(ctx, user: discord.User, *, reason="No reason provided"):
     if not ctx.author.guild_permissions.administrator:
@@ -189,17 +239,17 @@ async def strike(ctx, user: discord.User, *, reason="No reason provided"):
     if strike_count == 1:
         color = discord.Color.yellow()
         warning = "First strike - Warning"
-        main_message = f"{user.mention} has received a strike."
+        main_msg = f"{user.mention} has received a strike."
     elif strike_count == 2:
         color = discord.Color.orange()
         warning = "Second strike - Final warning"
-        main_message = f"{user.mention} has received a strike."
+        main_msg = f"{user.mention} has received a strike."
     else:
         color = discord.Color.red()
         warning = "Third strike - Further action will be taken"
-        main_message = f"{user.mention} has reached the strike limit."
+        main_msg = f"{user.mention} has reached the strike limit."
 
-    embed = discord.Embed(title="Strike Issued", description=main_message, color=color)
+    embed = discord.Embed(title="Strike Issued", description=main_msg, color=color)
     embed.add_field(name="Total Strikes", value=f"{strike_count}/{MAX_STRIKES}", inline=True)
     embed.add_field(name="Issued By", value=ctx.author.mention, inline=True)
     embed.add_field(name="Reason", value=reason, inline=True)
@@ -211,14 +261,13 @@ async def strike(ctx, user: discord.User, *, reason="No reason provided"):
 
     if strike_count >= MAX_STRIKES:
         try:
-            dm_embed = discord.Embed(title="Strike limit reached", description=f"You have received {MAX_STRIKES} strikes in {ctx.guild.name}.", color=discord.Color.red())
-            dm_embed.add_field(name="Further action", value="Contact an administrator.", inline=False)
-            dm_embed.add_field(name="Last strike reason", value=reason, inline=False)
-            await user.send(embed=dm_embed)
+            dm = discord.Embed(title="Strike limit reached", description=f"You have received {MAX_STRIKES} strikes in {ctx.guild.name}.", color=discord.Color.red())
+            dm.add_field(name="Further action", value="Contact an administrator.", inline=False)
+            dm.add_field(name="Last strike reason", value=reason, inline=False)
+            await user.send(embed=dm)
         except:
             pass
 
-# --------------------- STRIKE VIEW (buttons) ---------------------
 class StrikeView(View):
     def __init__(self, user: discord.User, strikes_data: dict):
         super().__init__(timeout=60)
@@ -242,18 +291,22 @@ class StrikeView(View):
             self.strikes_data[self.user_id]['history'].pop()
         save_strikes(self.strikes_data)
         new_count = self.strikes_data[self.user_id]['count']
-        if new_count >= 3: color = discord.Color.red()
-        elif new_count == 2: color = discord.Color.orange()
-        elif new_count == 1: color = discord.Color.yellow()
-        else: color = discord.Color.green()
+        if new_count >= 3:
+            color = discord.Color.red()
+        elif new_count == 2:
+            color = discord.Color.orange()
+        elif new_count == 1:
+            color = discord.Color.yellow()
+        else:
+            color = discord.Color.green()
         embed = discord.Embed(title=f"{self.user.name}'s Strikes", description=f"Total Strikes: {new_count}/{MAX_STRIKES}", color=color)
         if new_count > 0 and self.strikes_data[self.user_id]['history']:
             history_text = ""
-            for i, record in enumerate(self.strikes_data[self.user_id]['history'][-5:], 1):
-                timestamp = record['timestamp'][:10]
-                given_by = record['given_by']
-                reason = record.get('reason', 'No reason')
-                history_text += f"{i}. {timestamp} (by {given_by}) - {reason}\n"
+            for i, rec in enumerate(self.strikes_data[self.user_id]['history'][-5:], 1):
+                ts = rec['timestamp'][:10]
+                given_by = rec['given_by']
+                reason = rec.get('reason', 'No reason')
+                history_text += f"{i}. {ts} (by {given_by}) - {reason}\n"
             embed.add_field(name="Strike History (last 3)", value=history_text, inline=False)
         else:
             embed.add_field(name="Strike History", value="No strikes remaining.", inline=False)
@@ -278,29 +331,29 @@ class StrikeView(View):
             await interaction.response.send_message(f"{self.user.mention} has no strikes to clear.", ephemeral=True)
             return
         class ConfirmView(View):
-            def __init__(self, parent_view):
+            def __init__(self, parent):
                 super().__init__(timeout=30)
-                self.parent_view = parent_view
+                self.parent = parent
             @discord.ui.button(label="Yes, Clear All", style=discord.ButtonStyle.danger)
-            async def confirm(self, confirm_interaction: discord.Interaction, confirm_button: Button):
-                self.parent_view.strikes_data[self.parent_view.user_id]['count'] = 0
-                self.parent_view.strikes_data[self.parent_view.user_id]['history'] = []
-                save_strikes(self.parent_view.strikes_data)
-                embed = discord.Embed(title=f"{self.parent_view.user.name}'s Strikes", description=f"Total Strikes: 0/{MAX_STRIKES}", color=discord.Color.green())
+            async def confirm(self, ci: discord.Interaction, cb: Button):
+                self.parent.strikes_data[self.parent.user_id]['count'] = 0
+                self.parent.strikes_data[self.parent.user_id]['history'] = []
+                save_strikes(self.parent.strikes_data)
+                embed = discord.Embed(title=f"{self.parent.user.name}'s Strikes", description=f"Total Strikes: 0/{MAX_STRIKES}", color=discord.Color.green())
                 embed.add_field(name="Strike History", value="All strikes cleared.", inline=False)
-                for child in self.parent_view.children:
+                for child in self.parent.children:
                     child.disabled = True
-                await confirm_interaction.response.edit_message(embed=embed, view=self.parent_view)
-                await confirm_interaction.followup.send(f"Removed all strikes from {self.parent_view.user.mention}", ephemeral=True)
+                await ci.response.edit_message(embed=embed, view=self.parent)
+                await ci.followup.send(f"Removed all strikes from {self.parent.user.mention}", ephemeral=True)
                 log_channel = bot.get_channel(LOG_CHANNEL_ID)
                 if log_channel:
-                    clear_embed = discord.Embed(title="All Strikes Cleared", description=f"All strikes cleared for {self.parent_view.user.mention}", color=discord.Color.purple(), timestamp=datetime.now())
-                    clear_embed.add_field(name="User", value=f"{self.parent_view.user.name} ({self.parent_view.user.id})", inline=True)
-                    clear_embed.add_field(name="Cleared By", value=confirm_interaction.user.mention, inline=True)
+                    clear_embed = discord.Embed(title="All Strikes Cleared", description=f"All strikes cleared for {self.parent.user.mention}", color=discord.Color.purple(), timestamp=datetime.now())
+                    clear_embed.add_field(name="User", value=f"{self.parent.user.name} ({self.parent.user.id})", inline=True)
+                    clear_embed.add_field(name="Cleared By", value=ci.user.mention, inline=True)
                     await log_channel.send(embed=clear_embed)
             @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, cancel_interaction: discord.Interaction, cancel_button: Button):
-                await cancel_interaction.response.edit_message(content="Cancelled.", view=None)
+            async def cancel(self, ci: discord.Interaction, cb: Button):
+                await ci.response.edit_message(content="Cancelled.", view=None)
         confirm_view = ConfirmView(self)
         await interaction.response.send_message(f"Are you sure you want to remove all strikes from {self.user.mention}? This cannot be undone.", view=confirm_view, ephemeral=True)
 
@@ -314,7 +367,6 @@ class StrikeView(View):
         if self.message:
             await self.message.edit(view=self)
 
-# --------------------- STRIKE MENU ---------------------
 @bot.command(name='strikemenu')
 async def strikemenu(ctx, user: discord.User):
     if not ctx.author.guild_permissions.administrator:
@@ -333,21 +385,23 @@ async def strikemenu(ctx, user: discord.User):
         return
     strike_count = strikes_data[user_id]['count']
     history = strikes_data[user_id]['history']
-    if strike_count >= 3: color = discord.Color.red()
-    elif strike_count == 2: color = discord.Color.orange()
-    else: color = discord.Color.yellow()
+    if strike_count >= 3:
+        color = discord.Color.red()
+    elif strike_count == 2:
+        color = discord.Color.orange()
+    else:
+        color = discord.Color.yellow()
     history_text = ""
-    for i, record in enumerate(history[-5:], 1):
-        timestamp = record['timestamp'][:10]
-        given_by = record['given_by']
-        reason = record.get('reason', 'No reason')
-        history_text += f"{i}. {timestamp} (by {given_by}) - {reason}\n"
+    for i, rec in enumerate(history[-5:], 1):
+        ts = rec['timestamp'][:10]
+        given_by = rec['given_by']
+        reason = rec.get('reason', 'No reason')
+        history_text += f"{i}. {ts} (by {given_by}) - {reason}\n"
     embed = discord.Embed(title=f"{user.name}'s Strikes", description=f"Total Strikes: {strike_count}/{MAX_STRIKES}", color=color)
     embed.add_field(name="Strike History (last 3)", value=history_text or "No history", inline=False)
     view = StrikeView(user, strikes_data)
     view.message = await ctx.send(embed=embed, view=view)
 
-# --------------------- MY STRIKES ---------------------
 @bot.command(name='mystrikes')
 async def mystrikes(ctx):
     user_id = str(ctx.author.id)
@@ -358,15 +412,21 @@ async def mystrikes(ctx):
         return
     strike_count = strikes_data[user_id]['count']
     history = strikes_data[user_id]['history']
-    if strike_count == 1: color = discord.Color.yellow(); status = "Warning"
-    elif strike_count == 2: color = discord.Color.orange(); status = "Final warning"
-    else: color = discord.Color.red(); status = "Strike limit reached"
+    if strike_count == 1:
+        color = discord.Color.yellow()
+        status = "Warning"
+    elif strike_count == 2:
+        color = discord.Color.orange()
+        status = "Final warning"
+    else:
+        color = discord.Color.red()
+        status = "Strike limit reached"
     history_text = ""
-    for i, record in enumerate(history[-5:], 1):
-        timestamp = record['timestamp'][:10]
-        given_by = record['given_by']
-        reason = record.get('reason', 'No reason')
-        history_text += f"{i}. {timestamp} (by {given_by}) - {reason}\n"
+    for i, rec in enumerate(history[-5:], 1):
+        ts = rec['timestamp'][:10]
+        given_by = rec['given_by']
+        reason = rec.get('reason', 'No reason')
+        history_text += f"{i}. {ts} (by {given_by}) - {reason}\n"
     embed = discord.Embed(title="Your Strikes", description=f"You have {strike_count}/{MAX_STRIKES} strikes.", color=color)
     embed.add_field(name="Status", value=status, inline=False)
     embed.add_field(name="Strike History (last 3)", value=history_text or "No history", inline=False)
@@ -374,7 +434,179 @@ async def mystrikes(ctx):
         embed.set_footer(text="Please contact an administrator.")
     await ctx.send(embed=embed)
 
-# --------------------- SENDALL (unchanged but cleaned) ---------------------
+# --------------------- WARN SYSTEM ---------------------
+@bot.command(name='warn')
+@commands.has_permissions(administrator=True)
+async def warn(ctx, user: discord.User, *, reason="No reason provided"):
+    global warnings
+    warnings = load_warnings()
+    user_id = str(user.id)
+    if user_id == str(ctx.author.id):
+        await ctx.send("You cannot warn yourself.")
+        return
+    if user.id == bot.user.id:
+        await ctx.send("You cannot warn the bot.")
+        return
+    if user_id not in warnings:
+        warnings[user_id] = {'username': user.name, 'count': 0, 'history': []}
+    warnings[user_id]['count'] += 1
+    warnings[user_id]['history'].append({
+        'timestamp': datetime.now().isoformat(),
+        'warned_by': ctx.author.name,
+        'warned_by_id': ctx.author.id,
+        'reason': reason
+    })
+    save_warnings(warnings)
+    warn_count = warnings[user_id]['count']
+    await log_warning(user, ctx.author, reason, warn_count)
+
+    if warn_count == 1:
+        color = discord.Color.yellow()
+        level = "First warning"
+    elif warn_count == 2:
+        color = discord.Color.yellow()
+        level = "Second warning"
+    elif warn_count == 3:
+        color = discord.Color.orange()
+        level = "Third warning - Final warning"
+    else:
+        color = discord.Color.red()
+        level = "Warning limit reached - Action pending"
+
+    embed = discord.Embed(title="Warning Issued", description=f"{user.mention} has received a warning.", color=color, timestamp=datetime.now())
+    embed.add_field(name="Total Warnings", value=f"{warn_count}/{MAX_WARNINGS}", inline=True)
+    embed.add_field(name="Issued By", value=ctx.author.mention, inline=True)
+    embed.add_field(name="Reason", value=reason, inline=True)
+    embed.add_field(name="Warning Level", value=level, inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await ctx.send(embed=embed)
+
+    if warn_count >= MAX_WARNINGS:
+        member = ctx.guild.get_member(user.id)
+        if member:
+            until = discord.utils.utcnow() + timedelta(hours=1)
+            try:
+                await member.timeout(until, reason=f"Reached {MAX_WARNINGS} warnings")
+                await ctx.send(f"{user.mention} has been automatically timed out for 1 hour due to reaching {MAX_WARNINGS} warnings.")
+            except:
+                pass
+
+@bot.command(name='warnings')
+async def check_warnings(ctx, user: discord.User = None):
+    if user is None:
+        user = ctx.author
+    user_id = str(user.id)
+    if user.id != ctx.author.id and not ctx.author.guild_permissions.administrator:
+        await ctx.send("You can only check your own warnings.")
+        return
+    if user_id not in warnings or warnings[user_id]['count'] == 0:
+        embed = discord.Embed(title="Warnings", description=f"{user.mention} has 0/{MAX_WARNINGS} warnings.", color=discord.Color.green())
+        await ctx.send(embed=embed)
+        return
+    count = warnings[user_id]['count']
+    history = warnings[user_id]['history']
+    if count >= MAX_WARNINGS:
+        color = discord.Color.red()
+        status = "Action pending"
+    elif count >= 3:
+        color = discord.Color.orange()
+        status = "Multiple warnings"
+    else:
+        color = discord.Color.yellow()
+        status = "Warning(s) issued"
+    history_text = ""
+    for i, rec in enumerate(history[-5:], 1):
+        ts = rec['timestamp'][:10]
+        warned_by = rec['warned_by']
+        reason = rec.get('reason', 'No reason')
+        history_text += f"{i}. {ts} (by {warned_by}) - {reason}\n"
+    embed = discord.Embed(title=f"{user.name}'s Warnings", description=f"Total: {count}/{MAX_WARNINGS}", color=color)
+    embed.add_field(name="Status", value=status, inline=False)
+    embed.add_field(name="Warning History (last 5)", value=history_text or "No history", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command(name='clearwarnings')
+@commands.has_permissions(administrator=True)
+async def clear_warnings(ctx, user: discord.User):
+    user_id = str(user.id)
+    if user_id not in warnings or warnings[user_id]['count'] == 0:
+        await ctx.send(f"{user.mention} has no warnings to clear.")
+        return
+    old_count = warnings[user_id]['count']
+    warnings[user_id]['count'] = 0
+    warnings[user_id]['history'] = []
+    save_warnings(warnings)
+    embed = discord.Embed(title="Warnings Cleared", description=f"Cleared {old_count} warnings for {user.mention}", color=discord.Color.green(), timestamp=datetime.now())
+    embed.add_field(name="Cleared By", value=ctx.author.mention, inline=True)
+    await ctx.send(embed=embed)
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        log_embed = discord.Embed(title="Warnings Cleared", description=f"All warnings cleared for {user.mention}", color=discord.Color.blue(), timestamp=datetime.now())
+        log_embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=True)
+        log_embed.add_field(name="Cleared By", value=f"{ctx.author.name} ({ctx.author.id})", inline=True)
+        log_embed.add_field(name="Warnings Removed", value=str(old_count), inline=True)
+        await log_channel.send(embed=log_embed)
+
+@bot.tree.command(name="warn", description="Warn a user")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(user="The user to warn", reason="Reason for the warning")
+async def slash_warn(interaction: discord.Interaction, user: discord.User, reason: str = "No reason provided"):
+    await interaction.response.defer()
+    global warnings
+    warnings = load_warnings()
+    uid = str(user.id)
+    if uid == str(interaction.user.id):
+        await interaction.followup.send("You cannot warn yourself.")
+        return
+    if user.id == bot.user.id:
+        await interaction.followup.send("You cannot warn the bot.")
+        return
+    if uid not in warnings:
+        warnings[uid] = {'username': user.name, 'count': 0, 'history': []}
+    warnings[uid]['count'] += 1
+    warnings[uid]['history'].append({
+        'timestamp': datetime.now().isoformat(),
+        'warned_by': interaction.user.name,
+        'warned_by_id': interaction.user.id,
+        'reason': reason
+    })
+    save_warnings(warnings)
+    warn_count = warnings[uid]['count']
+    await log_warning(user, interaction.user, reason, warn_count)
+
+    if warn_count == 1:
+        color = discord.Color.yellow()
+        level = "First warning"
+    elif warn_count == 2:
+        color = discord.Color.yellow()
+        level = "Second warning"
+    elif warn_count == 3:
+        color = discord.Color.orange()
+        level = "Third warning - Final warning"
+    else:
+        color = discord.Color.red()
+        level = "Warning limit reached - Action pending"
+    embed = discord.Embed(title="Warning Issued", description=f"{user.mention} has received a warning.", color=color, timestamp=datetime.now())
+    embed.add_field(name="Total Warnings", value=f"{warn_count}/{MAX_WARNINGS}", inline=True)
+    embed.add_field(name="Issued By", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Reason", value=reason, inline=True)
+    embed.add_field(name="Warning Level", value=level, inline=False)
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    await interaction.followup.send(embed=embed)
+
+    if warn_count >= MAX_WARNINGS:
+        member = interaction.guild.get_member(user.id)
+        if member:
+            until = discord.utils.utcnow() + timedelta(hours=1)
+            try:
+                await member.timeout(until, reason=f"Reached {MAX_WARNINGS} warnings")
+                await interaction.followup.send(f"{user.mention} has been automatically timed out for 1 hour.")
+            except:
+                pass
+
+# --------------------- SENDALL & NICKNAME ---------------------
 @bot.command(name='sendall')
 async def sendall(ctx, *, message):
     if not ctx.author.guild_permissions.administrator:
@@ -398,7 +630,6 @@ async def sendall(ctx, *, message):
             failed += 1
     await ctx.send(f"Sent to {sent} members. Failed: {failed}")
 
-# --------------------- NICKNAME MANAGEMENT ---------------------
 @bot.command(name='updatenick')
 @commands.has_permissions(administrator=True)
 async def updatenick(ctx, member: discord.Member = None):
@@ -416,8 +647,7 @@ async def updateallnicks(ctx):
     for member in guild.members:
         if member.bot:
             continue
-        has_matching_role = any(role.id in ROLE_NICKNAME_MAP for role in member.roles)
-        if not has_matching_role:
+        if not any(role.id in ROLE_NICKNAME_MAP for role in member.roles):
             continue
         try:
             await update_nickname_with_roles(member)
@@ -427,7 +657,6 @@ async def updateallnicks(ctx):
         await asyncio.sleep(0.3)
     await ctx.send(f"Updated {updated} members.")
 
-# --------------------- MUTE FIX ---------------------
 @bot.command(name='fixmute')
 @commands.has_permissions(administrator=True)
 async def fix_mute_role(ctx):
@@ -446,26 +675,32 @@ async def fix_mute_role(ctx):
         await asyncio.sleep(0.1)
     await ctx.send(f"Fixed permissions for {count} channels.")
 
-# --------------------- SLASH COMMANDS (emoji‑free) ---------------------
+@bot.command(name='sync')
+@commands.has_permissions(administrator=True)
+async def sync_commands(ctx):
+    await bot.tree.sync()
+    await ctx.send("Slash commands synced.")
+
+# --------------------- SLASH COMMANDS (ban, unban, kick, mute, unmute, timeout) ---------------------
 @bot.tree.command(name="ban", description="Ban a user from the server")
 @app_commands.checks.has_permissions(ban_members=True)
 @app_commands.describe(user="The user to ban", reason="Reason for the ban", duration="How long - 1d, 12h, 30m")
 async def slash_ban(interaction: discord.Interaction, user: discord.User, reason: str = "No reason provided", duration: str = None):
     await interaction.response.defer()
-    duration_seconds = parse_duration(duration) if duration else None
-    duration_text = format_duration(duration_seconds) if duration_seconds else "Permanent"
+    dur_sec = parse_duration(duration) if duration else None
+    dur_text = format_duration(dur_sec) if dur_sec else "Permanent"
     embed = discord.Embed(title="User Banned", color=discord.Color.red(), timestamp=datetime.now())
     embed.add_field(name="User", value=f"{user.mention}\n`{user.name}`", inline=True)
     embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
-    embed.add_field(name="Duration", value=duration_text, inline=True)
+    embed.add_field(name="Duration", value=dur_text, inline=True)
     embed.add_field(name="Reason", value=reason, inline=False)
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
     try:
-        dm_embed = discord.Embed(title=f"You have been banned from {interaction.guild.name}", color=discord.Color.red())
-        dm_embed.add_field(name="Reason", value=reason, inline=False)
-        dm_embed.add_field(name="Duration", value=duration_text, inline=False)
-        await user.send(embed=dm_embed)
+        dm = discord.Embed(title=f"You have been banned from {interaction.guild.name}", color=discord.Color.red())
+        dm.add_field(name="Reason", value=reason, inline=False)
+        dm.add_field(name="Duration", value=dur_text, inline=False)
+        await user.send(embed=dm)
     except:
         pass
     try:
@@ -506,9 +741,9 @@ async def slash_kick(interaction: discord.Interaction, user: discord.User, reaso
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
     try:
-        dm_embed = discord.Embed(title=f"You have been kicked from {interaction.guild.name}", color=discord.Color.orange())
-        dm_embed.add_field(name="Reason", value=reason, inline=False)
-        await user.send(embed=dm_embed)
+        dm = discord.Embed(title=f"You have been kicked from {interaction.guild.name}", color=discord.Color.orange())
+        dm.add_field(name="Reason", value=reason, inline=False)
+        await user.send(embed=dm)
     except:
         pass
     try:
@@ -526,11 +761,11 @@ async def slash_mute(interaction: discord.Interaction, user: discord.User, reaso
     if not member:
         await interaction.followup.send(embed=discord.Embed(title="Mute Failed", description="User not in server.", color=discord.Color.red()))
         return
-    duration_seconds = parse_duration(duration)
-    if not duration_seconds:
+    dur_sec = parse_duration(duration)
+    if not dur_sec:
         await interaction.followup.send(embed=discord.Embed(title="Invalid Duration", description="Use format: 1d, 12h, 30m, 60s", color=discord.Color.red()))
         return
-    duration_text = format_duration(duration_seconds)
+    dur_text = format_duration(dur_sec)
     muted_role = discord.utils.get(interaction.guild.roles, name="Muted")
     if not muted_role:
         try:
@@ -550,22 +785,22 @@ async def slash_mute(interaction: discord.Interaction, user: discord.User, reaso
     embed = discord.Embed(title="User Muted", color=discord.Color.yellow(), timestamp=datetime.now())
     embed.add_field(name="User", value=f"{user.mention}\n`{user.name}`", inline=True)
     embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
-    embed.add_field(name="Duration", value=duration_text, inline=True)
+    embed.add_field(name="Duration", value=dur_text, inline=True)
     embed.add_field(name="Reason", value=reason, inline=False)
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
     try:
-        dm_embed = discord.Embed(title=f"You have been muted in {interaction.guild.name}", color=discord.Color.yellow())
-        dm_embed.add_field(name="Duration", value=duration_text, inline=False)
-        dm_embed.add_field(name="Reason", value=reason, inline=False)
-        await user.send(embed=dm_embed)
+        dm = discord.Embed(title=f"You have been muted in {interaction.guild.name}", color=discord.Color.yellow())
+        dm.add_field(name="Duration", value=dur_text, inline=False)
+        dm.add_field(name="Reason", value=reason, inline=False)
+        await user.send(embed=dm)
     except:
         pass
     try:
         await member.add_roles(muted_role, reason=f"Muted: {reason}")
         await interaction.followup.send(embed=embed)
         async def auto_unmute():
-            await asyncio.sleep(duration_seconds)
+            await asyncio.sleep(dur_sec)
             if muted_role in member.roles:
                 await member.remove_roles(muted_role, reason="Mute duration expired")
         asyncio.create_task(auto_unmute())
@@ -604,28 +839,28 @@ async def slash_timeout(interaction: discord.Interaction, user: discord.User, re
     if not member:
         await interaction.followup.send(embed=discord.Embed(title="Timeout Failed", description="User not in server.", color=discord.Color.red()))
         return
-    duration_seconds = parse_duration(duration)
-    if not duration_seconds:
+    dur_sec = parse_duration(duration)
+    if not dur_sec:
         await interaction.followup.send(embed=discord.Embed(title="Invalid Duration", description="Use format: 1d, 12h, 30m, 60s", color=discord.Color.red()))
         return
-    if duration_seconds > 2419200:
-        duration_seconds = 2419200
-    duration_text = format_duration(duration_seconds)
-    until = discord.utils.utcnow() + timedelta(seconds=duration_seconds)
+    if dur_sec > 2419200:
+        dur_sec = 2419200
+    dur_text = format_duration(dur_sec)
+    until = discord.utils.utcnow() + timedelta(seconds=dur_sec)
     embed = discord.Embed(title="User Timed Out", color=discord.Color.orange(), timestamp=datetime.now())
     embed.add_field(name="User", value=f"{user.mention}\n`{user.name}`", inline=True)
     embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
-    embed.add_field(name="Duration", value=duration_text, inline=True)
+    embed.add_field(name="Duration", value=dur_text, inline=True)
     embed.add_field(name="Expires", value=f"<t:{int(until.timestamp())}:R>", inline=True)
     embed.add_field(name="Reason", value=reason, inline=False)
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
     try:
-        dm_embed = discord.Embed(title=f"You have been timed out in {interaction.guild.name}", color=discord.Color.orange())
-        dm_embed.add_field(name="Duration", value=duration_text, inline=False)
-        dm_embed.add_field(name="Expires", value=f"<t:{int(until.timestamp())}:R>", inline=False)
-        dm_embed.add_field(name="Reason", value=reason, inline=False)
-        await user.send(embed=dm_embed)
+        dm = discord.Embed(title=f"You have been timed out in {interaction.guild.name}", color=discord.Color.orange())
+        dm.add_field(name="Duration", value=dur_text, inline=False)
+        dm.add_field(name="Expires", value=f"<t:{int(until.timestamp())}:R>", inline=False)
+        dm.add_field(name="Reason", value=reason, inline=False)
+        await user.send(embed=dm)
     except:
         pass
     try:
@@ -633,12 +868,6 @@ async def slash_timeout(interaction: discord.Interaction, user: discord.User, re
         await interaction.followup.send(embed=embed)
     except Exception as e:
         await interaction.followup.send(embed=discord.Embed(title="Timeout Failed", description=str(e), color=discord.Color.red()))
-
-@bot.command(name='sync')
-@commands.has_permissions(administrator=True)
-async def sync_commands(ctx):
-    await bot.tree.sync()
-    await ctx.send("Slash commands synced.")
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
